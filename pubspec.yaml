@@ -1,0 +1,50 @@
+name: aikeyboardapp
+description: "AI-powered voice keyboard app with Gemini 2.0 Flash integration."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+
+  # AI / LLM
+  google_generative_ai: ^0.4.6
+
+  # Speech-to-text
+  speech_to_text: ^6.6.0
+
+  # Text-to-speech
+  flutter_tts: ^4.0.0
+
+  # Secure storage
+  flutter_secure_storage: ^9.0.0
+
+  # Permissions
+  permission_handler: ^11.3.0
+
+  # Dependency injection
+  get_it: ^7.7.0
+
+  # HTTP (for Whisper fallback)
+  http: ^1.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  riverpod_generator: ^2.4.0
+  build_runner: ^2.4.8
+  mocktail: ^1.0.3
+
+flutter:
+  uses-material-design: true

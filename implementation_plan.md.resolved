@@ -1,0 +1,169 @@
+# AI Voice Keyboard App — Implementation Plan
+
+Build a production-grade AI-powered Flutter keyboard app (Android IME) that records speech, transcribes via STT, detects the active app context, rewrites text via Gemini 2.0 Flash with app-aware tone, and injects the result into the active text field. This is a real `InputMethodService`, not an overlay.
+
+> [!IMPORTANT]
+> **API Keys Required**: The user must provide a Gemini API key (and optionally an OpenAI key for Whisper fallback) at runtime via the Settings screen. Keys are stored using `flutter_secure_storage` and never hardcoded.
+
+> [!WARNING]
+> **minSdk Change**: We will set `minSdk = 26` (Android 8.0) in [build.gradle.kts](file:///c:/Users/DELL/aikeyboardapp/android/build.gradle.kts) to support `UsageStatsManager` and modern IME APIs. This drops support for Android 7 and below.
+
+## Proposed Changes
+
+### Phase 1 — Android Native IME Shell
+
+#### [NEW] [AiKeyboardService.kt](file:///c:/Users/DELL/aikeyboardapp/android/app/src/main/kotlin/com/example/aikeyboardapp/AiKeyboardService.kt)
+- Extends `InputMethodService`, implements `MethodChannel.MethodCallHandler`
+- `onCreateInputView()` → creates a `FlutterView` / `FlutterEngine` rendering the keyboard UI
+- `onStartInputView()` → notifies Flutter of active field info
+- MethodChannel `ai_keyboard/commit` handles `commitText` and `deleteSurroundingText`
+
+#### [NEW] [AppContextPlugin.kt](file:///c:/Users/DELL/aikeyboardapp/android/app/src/main/kotlin/com/example/aikeyboardapp/AppContextPlugin.kt)
+- MethodChannel `ai_keyboard/context`
+- Method `getForegroundApp` → returns `{appName, packageName}` using `UsageStatsManager`
+- Fallback to `ActivityManager.getRunningAppProcesses()` for older APIs
+
+#### [NEW] [method.xml](file:///c:/Users/DELL/aikeyboardapp/android/app/src/main/res/xml/method.xml)
+- Keyboard subtype definition for English (US)
+
+#### [MODIFY] [AndroidManifest.xml](file:///c:/Users/DELL/aikeyboardapp/android/app/src/main/AndroidManifest.xml)
+- Add `RECORD_AUDIO`, `PACKAGE_USAGE_STATS`, `INTERNET` permissions
+- Register `AiKeyboardService` with `BIND_INPUT_METHOD` permission + intent filter + metadata pointing to `@xml/method`
+
+#### [MODIFY] [build.gradle.kts](file:///c:/Users/DELL/aikeyboardapp/android/app/build.gradle.kts)
+- Set `minSdk = 26`
+
+#### [MODIFY] [MainActivity.kt](file:///c:/Users/DELL/aikeyboardapp/android/app/src/main/kotlin/com/example/aikeyboardapp/MainActivity.kt)
+- Register MethodChannels for `ai_keyboard/context` (AppContextPlugin)
+
+---
+
+### Phase 1 — Flutter IME Bridge & Keyboard UI
+
+#### [NEW] [ai_keyboard_service.dart](file:///c:/Users/DELL/aikeyboardapp/lib/keyboard/ai_keyboard_service.dart)
+- MethodChannel bridge to native `AiKeyboardService.kt`
+- Methods: `commitText()`, `deleteSurroundingText()`, `getEditorInfo()`
+
+#### [NEW] [keyboard_input_connection.dart](file:///c:/Users/DELL/aikeyboardapp/lib/keyboard/keyboard_input_connection.dart)
+- Helper class wrapping `commitText()` and `deleteSurroundingText()` calls
+
+#### [NEW] [keyboard_ui.dart](file:///c:/Users/DELL/aikeyboardapp/lib/keyboard/keyboard_ui.dart)
+- Top-level widget rendered inside the IME view, composes `KeyboardLayout`, `StatusBar`, `MicButton`
+
+#### [NEW] [keyboard_layout.dart](file:///c:/Users/DELL/aikeyboardapp/lib/ui/keyboard_layout.dart)
+- Full QWERTY keyboard layout with 3 letter rows + bottom row
+- Dark theme: background `#0D0D0D`, keys `#1C1C1E`, accent `#00E5FF`, text `#F5F5F5`
+- Key press animation: scale 0.92→1.0 with color flash
+- Shift, backspace, number toggle keys
+
+#### [NEW] [mic_button.dart](file:///c:/Users/DELL/aikeyboardapp/lib/ui/mic_button.dart)
+- Animated mic FAB with 4 states: idle (cyan), recording (pulsing red), processing (rotating arc), done (green check)
+- Long-press opens Settings
+
+#### [NEW] [status_bar.dart](file:///c:/Users/DELL/aikeyboardapp/lib/ui/status_bar.dart)
+- Thin strip at top of keyboard: `Idle | 🎙 Listening... | ⚡ Thinking... | ✓ Done`
+
+#### [NEW] [constants.dart](file:///c:/Users/DELL/aikeyboardapp/lib/core/constants.dart)
+- Color palette, animation durations, channel names
+
+#### [MODIFY] [main.dart](file:///c:/Users/DELL/aikeyboardapp/lib/main.dart)
+- Replace counter app with a settings/welcome screen that guides the user to enable the keyboard IME
+
+#### [MODIFY] [pubspec.yaml](file:///c:/Users/DELL/aikeyboardapp/pubspec.yaml)
+- Add dependencies: `flutter_riverpod`, `google_generative_ai`, `speech_to_text`, `flutter_tts`, `flutter_secure_storage`, `permission_handler`, `get_it`
+
+---
+
+### Phase 2 — STT Integration
+
+#### [NEW] [stt_service.dart](file:///c:/Users/DELL/aikeyboardapp/lib/features/stt/stt_service.dart)
+- Abstract `SttService` interface with `startListening()`, `stopListening()`, `onResult` stream
+
+#### [NEW] [google_stt_impl.dart](file:///c:/Users/DELL/aikeyboardapp/lib/features/stt/google_stt_impl.dart)
+- Uses `speech_to_text` package; 8-second timeout
+
+#### [NEW] [whisper_stt_impl.dart](file:///c:/Users/DELL/aikeyboardapp/lib/features/stt/whisper_stt_impl.dart)
+- Fallback STT using Whisper via HTTP (OpenAI API); records audio then sends to endpoint
+
+---
+
+### Phase 3 — Context Detection
+
+#### [NEW] [app_mode.dart](file:///c:/Users/DELL/aikeyboardapp/lib/features/context/app_mode.dart)
+- Enum: `professionalEmail`, `casualChat`, `structuredNote`, `businessPost`, `customerSupport`, `codeComment`, `defaultMode`
+
+#### [NEW] [app_context_detector.dart](file:///c:/Users/DELL/aikeyboardapp/lib/features/context/app_context_detector.dart)
+- Calls native `ai_keyboard/context` → `getForegroundApp`, maps result using tone presets
+
+#### [NEW] [tone_presets.dart](file:///c:/Users/DELL/aikeyboardapp/lib/features/llm/tone_presets.dart)
+- `Map<String, AppMode>` mapping package names to modes (as specified in the prompt)
+
+---
+
+### Phase 4 — Gemini Rewrite
+
+#### [NEW] [prompt_builder.dart](file:///c:/Users/DELL/aikeyboardapp/lib/features/llm/prompt_builder.dart)
+- `buildSystemPrompt()` function with the exact system prompt from requirements
+
+#### [NEW] [gemini_service.dart](file:///c:/Users/DELL/aikeyboardapp/lib/features/llm/gemini_service.dart)
+- Uses `google_generative_ai` package to call `gemini-2.0-flash`
+- Accepts raw text + mode → returns rewritten text
+- Error handling with retry + exponential backoff
+
+---
+
+### Phase 5 — TTS, Settings, State, Error Handling
+
+#### [NEW] [tts_service.dart](file:///c:/Users/DELL/aikeyboardapp/lib/features/tts/tts_service.dart)
+- Wraps `flutter_tts` with speak/stop methods
+
+#### [NEW] [keyboard_state.dart](file:///c:/Users/DELL/aikeyboardapp/lib/state/keyboard_state.dart)
+- Riverpod `StateNotifier<KeyboardPhase>` with transition logic: idle→recording→transcribed→processing→inserting→idle, any→error
+
+#### [NEW] [providers.dart](file:///c:/Users/DELL/aikeyboardapp/lib/state/providers.dart)
+- All Riverpod providers: keyboard state, STT, Gemini, TTS, context detector, settings
+
+#### [NEW] [env.dart](file:///c:/Users/DELL/aikeyboardapp/lib/core/env.dart)
+- Secure key management helpers using `flutter_secure_storage`
+
+#### [NEW] [error_handler.dart](file:///c:/Users/DELL/aikeyboardapp/lib/core/error_handler.dart)
+- Centralized error handling: permission errors, network, API, timeout
+
+#### [NEW] [error_widget.dart](file:///c:/Users/DELL/aikeyboardapp/lib/ui/error_widget.dart)
+- Retry UI shown inside keyboard when errors occur
+
+#### [NEW] [settings_screen.dart](file:///c:/Users/DELL/aikeyboardapp/lib/settings/settings_screen.dart)
+- API key input (masked), default tone override dropdown, TTS toggle, Whisper fallback toggle, debug toggle
+
+---
+
+### Phase 6 — Testing
+
+#### [NEW] [stt_service_test.dart](file:///c:/Users/DELL/aikeyboardapp/test/stt_service_test.dart)
+#### [NEW] [gemini_service_test.dart](file:///c:/Users/DELL/aikeyboardapp/test/gemini_service_test.dart)
+#### [NEW] [context_detector_test.dart](file:///c:/Users/DELL/aikeyboardapp/test/context_detector_test.dart)
+#### [NEW] [tone_preset_test.dart](file:///c:/Users/DELL/aikeyboardapp/test/tone_preset_test.dart)
+- Unit tests for: STT service (mock platform channel), Gemini service (mock HTTP), context detector (mock channel), tone preset mapping correctness
+
+---
+
+## Verification Plan
+
+### Automated Tests
+1. **Static analysis**: `flutter analyze` — must pass with zero errors
+2. **Unit tests**: `flutter test` — all test files must pass
+3. These commands will be run from the project root `c:\Users\DELL\aikeyboardapp`
+
+### Manual Verification (requires user with Android device)
+1. Run `flutter build apk --debug` to confirm the project compiles
+2. Install on Android device: `flutter install`
+3. Go to **Settings → System → Languages & Input → On-screen keyboard → Manage on-screen keyboards** → Enable "AI Keyboard"
+4. Open any app with a text field (e.g. Chrome, Notes)
+5. Switch to "AI Keyboard" and verify:
+   - QWERTY keyboard renders with dark theme
+   - Tapping letter keys types characters into the text field
+   - Mic button is visible with cyan icon
+   - Tapping mic starts recording (status bar shows "🎙 Listening...")
+   - Speaking text → transcript appears → Gemini rewrites → text inserted
+6. Open Gmail, tap mic, speak → should produce formal email-style text
+7. Open WhatsApp, tap mic, speak → should produce casual-style text
